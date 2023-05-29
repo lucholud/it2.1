@@ -1,5 +1,8 @@
 package ar.utn.dds.copiame;
 
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.impl.client.HttpClients;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
@@ -9,11 +12,22 @@ import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import java.nio.charset.StandardCharsets;
+import org.apache.http.client.HttpClient;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.commons.io.IOUtils;
+import org.apache.http.entity.ContentType;
+import java.io.IOException;
+import org.apache.http.client.ClientProtocolException;
 
 public class CopiameBot extends TelegramLongPollingBot {
 
-	public CopiameBot(String botToken) {
+	private final String apiEndpoint;
+
+	public CopiameBot(String botToken, String apiEndpoint) {
 		super(botToken);
+		this.apiEndpoint = apiEndpoint;
 	}
 
 	@Override
@@ -23,49 +37,44 @@ public class CopiameBot extends TelegramLongPollingBot {
 			Document document = message.getDocument();
 			if (document.getMimeType().equals("application/zip")) {
 				try {
-					// Obtiene el archivo
+// Obtiene el archivo
 					GetFile getFile = new GetFile();
 					getFile.setFileId(message.getDocument().getFileId());
 					org.telegram.telegrambots.meta.api.objects.File file = execute(getFile);
 					java.io.File downloadedFile = downloadFile(file);
-
-					// Descomprime los archivos en un directorio
-					String destDirectory = "/tmp/" + message.getDocument().getFileId();
-					UnzipUtility.unzip(downloadedFile, destDirectory);
-
-					// Procesa al lote (Parte del dominio)
-					Lote lote = new Lote(destDirectory);
-					lote.validar();
-					lote.cargar();
-					float umbral = 0.5f;
-					AnalsisDeCopia analisis = new AnalsisDeCopia(umbral, lote);
-					analisis.addEvaluador(new EvaluadorDeCopiaAutomatico());
-					analisis.procesar();
-					ResultadoLote resultado = analisis.resultado();
-
-					// Genera la salida y manda el mensaje
-					String se_copiaron = "";
-					for (ParDocumentos par : resultado.getPosiblesCopias()) {
-						se_copiaron += par.getDocumento1().getAutor() + " " + par.getDocumento2().getAutor() + "\n";
-					}
-
-					// Envia el mensaje al usuario
+// Envia el archivo a la API
+					String rta = enviarLote(downloadedFile);
+					System.out.println(rta);
+// Envia el mensaje al usuario
 					SendMessage responseMsg = new SendMessage();
 					responseMsg.setChatId(message.getChatId());
-					if (se_copiaron.isBlank()) {
-						responseMsg.setText("No se copio nadie");
-					} else {
-						responseMsg.setText("Se copiaron: \n" + se_copiaron);
-					}
-
+					responseMsg.setText(rta);
 					execute(responseMsg);
-
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
 			}
 		}
 	}
+
+	private String enviarLote(java.io.File downloadedFile) throws IOException, ClientProtocolException {
+		HttpClient httpClient = HttpClients.createDefault();
+		HttpPost httpPost = new HttpPost(
+				this.apiEndpoint + "/analisis");
+		MultipartEntityBuilder builder =
+				MultipartEntityBuilder.create();
+		builder.addBinaryBody( "file", downloadedFile,
+				ContentType.DEFAULT_BINARY, "data.zip");
+		HttpEntity multipart = builder.build();
+		httpPost.setEntity(multipart);
+		HttpResponse execute = httpClient.execute(httpPost);
+		String rta = IOUtils.toString(
+				execute.getEntity().getContent(),
+				StandardCharsets.UTF_8.name());
+		return rta;
+	}
+
+
 
 	@Override
 	public String getBotUsername() {
@@ -82,7 +91,7 @@ public class CopiameBot extends TelegramLongPollingBot {
 			// Se devuelve el token que nos generó el BotFather de nuestro bot
 			String tokenbot = System.getenv("TOKEN_BOT");
 			// Se registra el bot
-			telegramBotsApi.registerBot(new CopiameBot(tokenbot));
+			telegramBotsApi.registerBot(new CopiameBot(tokenbot,"http://localhost:8080"));
 		} catch (TelegramApiException e) {
 			e.printStackTrace();
 		}
